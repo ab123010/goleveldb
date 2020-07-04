@@ -16,25 +16,26 @@ type dir int
 
 const (
 	dirReleased dir = iota - 1
-	dirSOI
-	dirEOI
-	dirBackward
-	dirForward
+	dirSOI			// 降序迭代完成
+	dirEOI			// 升序迭代完成
+	dirBackward		// 降序
+	dirForward		// 升序
 )
 
 type mergedIterator struct {
 	cmp    comparer.Comparer
 	iters  []Iterator
-	strict bool
+	strict bool					// 是否捕获损坏异常
 
-	keys     [][]byte
-	index    int
-	dir      dir
+	keys     [][]byte			// 目前iters中各个迭代器迭代位置的key
+	index    int				// 目前使用迭代器的index
+	dir      dir				// 文件状态标志
 	err      error
 	errf     func(err error)
 	releaser util.Releaser
 }
 
+// 若key为nil，panic，否则仅返回key
 func assertKey(key []byte) []byte {
 	if key == nil {
 		panic("leveldb/iterator: nil key")
@@ -42,12 +43,15 @@ func assertKey(key []byte) []byte {
 	return key
 }
 
+// 提取指定iter中error，有异常回调函数则调用，符合条件将error保存到自身mergedIterator中
+// 返回表示是否将error更新到自身
 func (i *mergedIterator) iterErr(iter Iterator) bool {
 	if err := iter.Error(); err != nil {
 		if i.errf != nil {
 			i.errf(err)
 		}
 		if i.strict || !errors.IsCorrupted(err) {
+			// 严格模式，或不是损坏异常
 			i.err = err
 			return true
 		}
@@ -55,6 +59,7 @@ func (i *mergedIterator) iterErr(iter Iterator) bool {
 	return false
 }
 
+// 判断可用性，err为nil且文件状态可用
 func (i *mergedIterator) Valid() bool {
 	return i.err == nil && i.dir > dirEOI
 }
@@ -67,10 +72,11 @@ func (i *mergedIterator) First() bool {
 		return false
 	}
 
+	// 改变iters中所有迭代器指针位置
 	for x, iter := range i.iters {
 		switch {
 		case iter.First():
-			i.keys[x] = assertKey(iter.Key())
+			i.keys[x] = assertKey(iter.Key())	// 值为nil时panic
 		case i.iterErr(iter):
 			return false
 		default:
@@ -111,6 +117,7 @@ func (i *mergedIterator) Seek(key []byte) bool {
 		return false
 	}
 
+	// 寻找每个迭代器中第一个大于等于key的位置
 	for x, iter := range i.iters {
 		switch {
 		case iter.Seek(key):
@@ -122,7 +129,7 @@ func (i *mergedIterator) Seek(key []byte) bool {
 		}
 	}
 	i.dir = dirSOI
-	return i.next()
+	return i.next()		// 是否存在可用key
 }
 
 func (i *mergedIterator) next() bool {
@@ -130,6 +137,7 @@ func (i *mergedIterator) next() bool {
 	if i.dir == dirForward {
 		key = i.keys[i.index]
 	}
+	// 大于父调用给定key中的最小的key
 	for x, tkey := range i.keys {
 		if tkey != nil && (key == nil || i.cmp.Compare(tkey, key) < 0) {
 			key = tkey
@@ -156,6 +164,7 @@ func (i *mergedIterator) Next() bool {
 	case dirSOI:
 		return i.First()
 	case dirBackward:
+		// 降序迭代时，先改变迭代方向再判断
 		key := append([]byte{}, i.keys[i.index]...)
 		if !i.Seek(key) {
 			return false
@@ -254,12 +263,15 @@ func (i *mergedIterator) Value() []byte {
 func (i *mergedIterator) Release() {
 	if i.dir != dirReleased {
 		i.dir = dirReleased
+		// 依次释放所有迭代器
 		for _, iter := range i.iters {
 			iter.Release()
 		}
+		// 自身相应状态设nil
 		i.iters = nil
 		i.keys = nil
 		if i.releaser != nil {
+			// 释放自身releaser
 			i.releaser.Release()
 			i.releaser = nil
 		}
@@ -271,6 +283,7 @@ func (i *mergedIterator) SetReleaser(releaser util.Releaser) {
 		panic(util.ErrReleased)
 	}
 	if i.releaser != nil && releaser != nil {
+		// 已有releaser，不能再次设定
 		panic(util.ErrHasReleaser)
 	}
 	i.releaser = releaser
@@ -294,6 +307,10 @@ func (i *mergedIterator) SetErrorCallback(f func(err error)) {
 // If strict is true the any 'corruption errors' (i.e errors.IsCorrupted(err) == true)
 // won't be ignored and will halt 'merged iterator', otherwise the iterator will
 // continue to the next 'input iterator'.
+// 返回合并其输入的迭代器
+// 按照cmp定义的顺序，升序返回所有输入迭代器的键值对
+// 输入的key范围可能重叠，但假定没有重复的key。
+// 任何迭代器不为nil
 func NewMergedIterator(iters []Iterator, cmp comparer.Comparer, strict bool) Iterator {
 	return &mergedIterator{
 		iters:  iters,

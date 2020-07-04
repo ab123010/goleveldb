@@ -17,6 +17,7 @@ type BasicArray interface {
 
 	// Search finds smallest index that point to a key that is greater
 	// than or equal to the given key.
+	// 找到指向大于或等于给定key的key的最小索引。
 	Search(key []byte) int
 }
 
@@ -25,25 +26,28 @@ type Array interface {
 	BasicArray
 
 	// Index returns key/value pair with index of i.
+	// 返回索引为i的键值对
 	Index(i int) (key, value []byte)
 }
 
-// Array is the interface that wraps BasicArray and basic Get method.
+// ArrayIndexer is the interface that wraps BasicArray and basic Get method.
 type ArrayIndexer interface {
 	BasicArray
 
 	// Get returns a new data iterator with index of i.
+	// 用索引i获取一个新的数据迭代器
 	Get(i int) Iterator
 }
 
 type basicArrayIterator struct {
 	util.BasicReleaser
 	array BasicArray
-	pos   int
+	pos   int			// 记录目前遍历位置
 	err   error
 }
 
 func (i *basicArrayIterator) Valid() bool {
+	// 验证可用性，目前遍历位置合法，且迭代器未被释放
 	return i.pos >= 0 && i.pos < i.array.Len() && !i.Released()
 }
 
@@ -94,6 +98,7 @@ func (i *basicArrayIterator) Seek(key []byte) bool {
 	return true
 }
 
+// pos++，若已迭代到最后位置，pos不增加，返回false
 func (i *basicArrayIterator) Next() bool {
 	if i.Released() {
 		i.err = ErrIterReleased
@@ -108,6 +113,7 @@ func (i *basicArrayIterator) Next() bool {
 	return true
 }
 
+// pos--，若pos位于0位置，置为-1，返回false
 func (i *basicArrayIterator) Prev() bool {
 	if i.Released() {
 		i.err = ErrIterReleased
@@ -131,12 +137,15 @@ type arrayIterator struct {
 	key, value []byte
 }
 
+// 更新目前arrayIterator中所存键值对，为数据遍历位置的键值对
 func (i *arrayIterator) updateKV() {
 	if i.pos == i.basicArrayIterator.pos {
+		// 此时保存的键值对即为所求
 		return
 	}
 	i.pos = i.basicArrayIterator.pos
 	if i.Valid() {
+		// 获取所求索引未知的键值对
 		i.key, i.value = i.array.Index(i.pos)
 	} else {
 		i.key = nil
@@ -176,6 +185,7 @@ func NewArrayIterator(array Array) Iterator {
 }
 
 // NewArrayIndexer returns an index iterator from the given array.
+// 可使用索引i获取array的迭代器
 func NewArrayIndexer(array ArrayIndexer) IteratorIndexer {
 	return &arrayIteratorIndexer{
 		basicArrayIterator: basicArrayIterator{array: array, pos: -1},

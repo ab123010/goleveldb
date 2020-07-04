@@ -5,6 +5,7 @@
 // found in the LICENSE file.
 
 // Package storage provides storage abstraction for LevelDB.
+// 提供存储抽象
 package storage
 
 import (

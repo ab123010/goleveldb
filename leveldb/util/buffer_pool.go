@@ -108,6 +108,7 @@ func (p *BufferPool) Get(n int) []byte {
 					atomic.AddUint32(&p.half, 1)
 					sizeHalfPtr := &p.sizeHalf[poolNum-1]
 					if atomic.AddUint32(sizeHalfPtr, 1) == 20 {
+						// sizeHalfPtr值为20，sizePtr对应值设为cap(b)/2)，重置sizeHalfPtr
 						atomic.StoreUint32(sizePtr, uint32(cap(b)/2))
 						atomic.StoreUint32(sizeHalfPtr, 0)
 					} else {

@@ -5,6 +5,7 @@
 // found in the LICENSE file.
 
 // Package memdb provides in-memory key/value database implementation.
+// 提供内存中的键/值数据库实现
 package memdb
 
 import (

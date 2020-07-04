@@ -48,6 +48,7 @@ type Cacher interface {
 type Value interface{}
 
 // NamespaceGetter provides convenient wrapper for namespace.
+// 根据ns，只需给定key即可访问cache.get()
 type NamespaceGetter struct {
 	Cache *Cache
 	NS    uint64
@@ -121,12 +122,14 @@ func (b *mBucket) get(r *Cache, h *mNode, hash uint32, ns, key uint64, noset boo
 	b.mu.Unlock()
 
 	// Update counter.
+	// 维护计数，并判断是否需要扩容
 	grow := atomic.AddInt32(&r.nodes, 1) >= h.growThreshold
 	if bLen > mOverflowThreshold {
 		grow = grow || atomic.AddInt32(&h.overflow, 1) >= mOverflowGrowThreshold
 	}
 
 	// Grow.
+	// 扩容
 	if grow && atomic.CompareAndSwapInt32(&h.resizeInProgess, 0, 1) {
 		nhLen := len(h.buckets) << 1
 		nh := &mNode{
@@ -146,6 +149,7 @@ func (b *mBucket) get(r *Cache, h *mNode, hash uint32, ns, key uint64, noset boo
 	return true, true, n
 }
 
+// 删除node并将其释放
 func (b *mBucket) delete(r *Cache, h *mNode, hash uint32, ns, key uint64) (done, deleted bool) {
 	b.mu.Lock()
 
@@ -196,6 +200,7 @@ func (b *mBucket) delete(r *Cache, h *mNode, hash uint32, ns, key uint64) (done,
 		}
 
 		// Shrink.
+		// 缩容
 		if shrink && len(h.buckets) > mInitialSize && atomic.CompareAndSwapInt32(&h.resizeInProgess, 0, 1) {
 			nhLen := len(h.buckets) >> 1
 			nh := &mNode{
@@ -216,11 +221,12 @@ func (b *mBucket) delete(r *Cache, h *mNode, hash uint32, ns, key uint64) (done,
 	return true, deleted
 }
 
+// 哈希表
 type mNode struct {
-	buckets         []unsafe.Pointer // []*mBucket
-	mask            uint32
-	pred            unsafe.Pointer // *mNode
-	resizeInProgess int32
+	buckets         []unsafe.Pointer 	// []*mBucket	node存储结构
+	mask            uint32				// uint32(len(buckets) >> 1) - 1，node存储在buckets[node.hash & mask]
+	pred            unsafe.Pointer 		// *mNode	指向扩容或缩容前数据，数据更新后置nil
+	resizeInProgess int32				// resize后置1
 
 	overflow        int32
 	growThreshold   int32
@@ -245,11 +251,13 @@ func (n *mNode) initBucket(i uint32) *mBucket {
 			// Split nodes.
 			for _, x := range m {
 				if x.hash&n.mask == i {
+					// node存在在索引(node.hash & mNode.hash)位置的bucket
 					node = append(node, x)
 				}
 			}
 		} else {
 			// Shrink.
+			// 存放缩容前i+uint32(len(n.buckets))和i位置处node
 			pb0 := (*mBucket)(atomic.LoadPointer(&p.buckets[i]))
 			if pb0 == nil {
 				pb0 = p.initBucket(i)
@@ -313,16 +321,19 @@ func NewCache(cacher Cacher) *Cache {
 	return r
 }
 
+// 获取索引hash & mask的bucket
 func (r *Cache) getBucket(hash uint32) (*mNode, *mBucket) {
 	h := (*mNode)(atomic.LoadPointer(&r.mHead))
 	i := hash & h.mask
 	b := (*mBucket)(atomic.LoadPointer(&h.buckets[i]))
 	if b == nil {
+		// 若不存在初始化该bucket
 		b = h.initBucket(i)
 	}
 	return h, b
 }
 
+// 根据node.hash获取bucket，再删除其中的node
 func (r *Cache) delete(n *Node) bool {
 	for {
 		h, b := r.getBucket(n.hash)
@@ -364,6 +375,8 @@ func (r *Cache) SetCapacity(capacity int) {
 //
 // The returned 'cache handle' should be released after use by calling Release
 // method.
+// 使用给定namespace and key获取
+// setFunc不为空时，找不到就添加node，否则返回nil
 func (r *Cache) Get(ns, key uint64, setFunc func() (size int, value Value)) *Handle {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -371,20 +384,25 @@ func (r *Cache) Get(ns, key uint64, setFunc func() (size int, value Value)) *Han
 		return nil
 	}
 
+	// 生成node.hash
 	hash := murmur32(ns, key, 0xf00)
 	for {
+		// 获取存储node的bucket
 		h, b := r.getBucket(hash)
 		done, _, n := b.get(r, h, hash, ns, key, setFunc == nil)
 		if done {
 			if n != nil {
 				n.mu.Lock()
 				if n.value == nil {
+					// 找到node，但node中值为空
 					if setFunc == nil {
+						// setFunc为空，n.ref-1，维护node引用计数
 						n.mu.Unlock()
 						n.unref()
 						return nil
 					}
 
+					// 根据setFunc创建node中数据
 					n.size, n.value = setFunc()
 					if n.value == nil {
 						n.size = 0
@@ -431,13 +449,15 @@ func (r *Cache) Delete(ns, key uint64, onDel func()) bool {
 			if n != nil {
 				if onDel != nil {
 					n.mu.Lock()
+					// n.onDel添加
 					n.onDel = append(n.onDel, onDel)
 					n.mu.Unlock()
 				}
 				if r.cacher != nil {
+					// 将node.ban置true
 					r.cacher.Ban(n)
 				}
-				n.unref()
+				n.unref()	// 维护引用计数
 				return true
 			}
 
@@ -446,6 +466,7 @@ func (r *Cache) Delete(ns, key uint64, onDel func()) bool {
 	}
 
 	if onDel != nil {
+		// node不存在，运行onDel
 		onDel()
 	}
 
@@ -511,6 +532,7 @@ func (r *Cache) EvictAll() {
 }
 
 // Close closes the 'cache map' and forcefully releases all 'cache node'.
+// 强制释放所有cache node
 func (r *Cache) Close() error {
 	r.mu.Lock()
 	if !r.closed {
@@ -551,6 +573,7 @@ func (r *Cache) Close() error {
 
 // CloseWeak closes the 'cache map' and evict all 'cache node' from cacher, but
 // unlike Close it doesn't forcefully releases 'cache node'.
+// 不强制释放node
 func (r *Cache) CloseWeak() error {
 	r.mu.Lock()
 	if !r.closed {
@@ -577,12 +600,12 @@ type Node struct {
 
 	mu    sync.Mutex
 	size  int
-	value Value
+	value Value					// 实现util.Releaser
 
 	ref   int32
-	onDel []func()
+	onDel []func()				// node被released时调用
 
-	CacheData unsafe.Pointer
+	CacheData unsafe.Pointer	// node在缓存中的信息
 }
 
 // NS returns this 'cache node' namespace.

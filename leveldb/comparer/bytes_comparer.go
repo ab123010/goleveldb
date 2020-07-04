@@ -19,7 +19,7 @@ func (bytesComparer) Name() string {
 }
 
 func (bytesComparer) Separator(dst, a, b []byte) []byte {
-	i, n := 0, len(a)
+	i, n := 0, len(a)		// n为a，b较短长度
 	if n > len(b) {
 		n = len(b)
 	}
@@ -27,7 +27,9 @@ func (bytesComparer) Separator(dst, a, b []byte) []byte {
 	}
 	if i >= n {
 		// Do not shorten if one string is a prefix of the other
+		// 一个string为另一个string前缀
 	} else if c := a[i]; c < 0xff && c+1 < b[i] {
+		// 添加一个比a大，比b小的比特序列
 		dst = append(dst, a[:i+1]...)
 		dst[len(dst)-1]++
 		return dst
@@ -38,6 +40,7 @@ func (bytesComparer) Separator(dst, a, b []byte) []byte {
 func (bytesComparer) Successor(dst, b []byte) []byte {
 	for i, c := range b {
 		if c != 0xff {
+			// 添加一个比b大的比特序列
 			dst = append(dst, b[:i+1]...)
 			dst[len(dst)-1]++
 			return dst
@@ -48,4 +51,5 @@ func (bytesComparer) Successor(dst, b []byte) []byte {
 
 // DefaultComparer are default implementation of the Comparer interface.
 // It uses the natural ordering, consistent with bytes.Compare.
+// Comparer接口默认实现，使用自然排序，调用bytes.Compare
 var DefaultComparer = bytesComparer{}

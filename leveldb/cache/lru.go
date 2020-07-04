@@ -11,14 +11,17 @@ import (
 	"unsafe"
 )
 
+
+// LRU节点
 type lruNode struct {
 	n   *Node
 	h   *Handle
-	ban bool
+	ban bool				// 是否禁用标志
 
-	next, prev *lruNode
+	next, prev *lruNode		// 双向链表
 }
 
+// n插到at后
 func (n *lruNode) insert(at *lruNode) {
 	x := at.next
 	at.next = n
@@ -27,6 +30,7 @@ func (n *lruNode) insert(at *lruNode) {
 	x.prev = n
 }
 
+// n.prev不能为空
 func (n *lruNode) remove() {
 	if n.prev != nil {
 		n.prev.next = n.next
@@ -41,10 +45,11 @@ func (n *lruNode) remove() {
 type lru struct {
 	mu       sync.Mutex
 	capacity int
-	used     int
-	recent   lruNode
+	used     int		// 所含node的size累加
+	recent   lruNode	// recent.prev指向最近最少使用的node，recent为哨兵节点
 }
 
+// 重置，resent.prev/next指向自身，used置0
 func (r *lru) reset() {
 	r.recent.next = &r.recent
 	r.recent.prev = &r.recent
@@ -62,6 +67,7 @@ func (r *lru) SetCapacity(capacity int) {
 
 	r.mu.Lock()
 	r.capacity = capacity
+	// 驱逐节点，防止超过设定容量
 	for r.used > r.capacity {
 		rn := r.recent.prev
 		if rn == nil {
@@ -84,12 +90,14 @@ func (r *lru) Promote(n *Node) {
 
 	r.mu.Lock()
 	if n.CacheData == nil {
+		// node不在缓存中
 		if n.Size() <= r.capacity {
 			rn := &lruNode{n: n, h: n.GetHandle()}
 			rn.insert(&r.recent)
 			n.CacheData = unsafe.Pointer(rn)
 			r.used += n.Size()
 
+			// 超出容量时
 			for r.used > r.capacity {
 				rn := r.recent.prev
 				if rn == nil {
@@ -102,24 +110,30 @@ func (r *lru) Promote(n *Node) {
 			}
 		}
 	} else {
+		// node在缓存中
+		// 取出node在LRUCache中的信息
 		rn := (*lruNode)(n.CacheData)
 		if !rn.ban {
+			// node未被禁用，将其重新添加进链表，维护最近使用
 			rn.remove()
 			rn.insert(&r.recent)
 		}
 	}
 	r.mu.Unlock()
 
+	// 驱逐节点，维护容量
 	for _, rn := range evicted {
 		rn.h.Release()
 	}
 }
 
+// 禁用节点，
 func (r *lru) Ban(n *Node) {
 	r.mu.Lock()
 	if n.CacheData == nil {
 		n.CacheData = unsafe.Pointer(&lruNode{n: n, ban: true})
 	} else {
+		// 若node已在LRUCache中，移除并禁用
 		rn := (*lruNode)(n.CacheData)
 		if !rn.ban {
 			rn.remove()
@@ -135,6 +149,7 @@ func (r *lru) Ban(n *Node) {
 	r.mu.Unlock()
 }
 
+// 若node存在于LRUCache中，将其驱逐
 func (r *lru) Evict(n *Node) {
 	r.mu.Lock()
 	rn := (*lruNode)(n.CacheData)
@@ -148,6 +163,7 @@ func (r *lru) Evict(n *Node) {
 	rn.h.Release()
 }
 
+// 驱逐LRUCache中指定ns的node
 func (r *lru) EvictNS(ns uint64) {
 	var evicted []*lruNode
 
@@ -169,6 +185,7 @@ func (r *lru) EvictNS(ns uint64) {
 	}
 }
 
+// 驱逐LRUCache所有节点
 func (r *lru) EvictAll() {
 	r.mu.Lock()
 	back := r.recent.prev
@@ -183,6 +200,7 @@ func (r *lru) EvictAll() {
 	}
 }
 
+// 未实现Close接口，不做任何操作
 func (r *lru) Close() error {
 	return nil
 }

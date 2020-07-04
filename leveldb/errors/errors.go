@@ -5,6 +5,7 @@
 // found in the LICENSE file.
 
 // Package errors provides common error types used throughout leveldb.
+// 通用error type
 package errors
 
 import (
@@ -29,6 +30,7 @@ func New(text string) error {
 
 // ErrCorrupted is the type that wraps errors that indicate corruption in
 // the database.
+// 包装'file descriptor'和错误
 type ErrCorrupted struct {
 	Fd  storage.FileDesc
 	Err error
@@ -68,6 +70,7 @@ func (e *ErrMissingFiles) Error() string { return "file missing" }
 
 // SetFd sets 'file info' of the given error with the given file.
 // Currently only ErrCorrupted is supported, otherwise will do nothing.
+// 用给定file为给定error封装file info
 func SetFd(err error, fd storage.FileDesc) error {
 	switch x := err.(type) {
 	case *ErrCorrupted:

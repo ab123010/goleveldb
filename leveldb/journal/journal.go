@@ -75,6 +75,8 @@
 // The wire format allows for limited recovery in the face of data corruption:
 // on a format error (such as a checksum mismatch), the reader moves to the
 // next block and looks for the next full or first chunk.
+//
+// 读取和写入日记序列。每个日志都是在下一个日志开始之前完成的字节流。
 package journal
 
 import (
