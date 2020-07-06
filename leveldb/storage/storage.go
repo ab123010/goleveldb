@@ -27,6 +27,7 @@ const (
 	TypeAll = TypeManifest | TypeJournal | TypeTable | TypeTemp
 )
 
+// 返回文件类型
 func (t FileType) String() string {
 	switch t {
 	case TypeManifest:
@@ -51,11 +52,13 @@ var (
 // ErrCorrupted is the type that wraps errors that indicate corruption of
 // a file. Package storage has its own type instead of using
 // errors.ErrCorrupted to prevent circular import.
+// 防止循环导入
 type ErrCorrupted struct {
 	Fd  FileDesc
 	Err error
 }
 
+// 是否为损坏异常
 func isCorrupted(err error) bool {
 	switch err.(type) {
 	case *ErrCorrupted:
@@ -74,6 +77,7 @@ func (e *ErrCorrupted) Error() string {
 // Syncer is the interface that wraps basic Sync method.
 type Syncer interface {
 	// Sync commits the current contents of the file to stable storage.
+	// 将文件的当前内容提交到稳定存储
 	Sync() error
 }
 
@@ -137,35 +141,44 @@ func FileDescOk(fd FileDesc) bool {
 }
 
 // Storage is the storage. A storage instance must be safe for concurrent use.
+// 需保证并发使用安全
 type Storage interface {
 	// Lock locks the storage. Any subsequent attempt to call Lock will fail
 	// until the last lock released.
 	// Caller should call Unlock method after use.
+	// 知道最后一个锁被释放前，所有对Lock的调用将会失败
 	Lock() (Locker, error)
 
 	// Log logs a string. This is used for logging.
 	// An implementation may write to a file, stdout or simply do nothing.
+	// 实现可以写入文件，标准输出或什么都不做
 	Log(str string)
 
 	// SetMeta store 'file descriptor' that can later be acquired using GetMeta
 	// method. The 'file descriptor' should point to a valid file.
 	// SetMeta should be implemented in such way that changes should happen
 	// atomically.
+	// 存储file descriptor
+	// file descriptor应指向一个有效的文件
+	// 实现应具有原子性
 	SetMeta(fd FileDesc) error
 
 	// GetMeta returns 'file descriptor' stored in meta. The 'file descriptor'
 	// can be updated using SetMeta method.
 	// Returns os.ErrNotExist if meta doesn't store any 'file descriptor', or
 	// 'file descriptor' point to nonexistent file.
+	// 返回存储的file descriptor
 	GetMeta() (FileDesc, error)
 
 	// List returns file descriptors that match the given file types.
 	// The file types may be OR'ed together.
+	// 返回与给定文件类型匹配的file descriptor
 	List(ft FileType) ([]FileDesc, error)
 
 	// Open opens file with the given 'file descriptor' read-only.
 	// Returns os.ErrNotExist error if the file does not exist.
 	// Returns ErrClosed if the underlying storage is closed.
+	// 只读形式打开
 	Open(fd FileDesc) (Reader, error)
 
 	// Create creates file with the given 'file descriptor', truncate if already
@@ -184,5 +197,6 @@ type Storage interface {
 	// Close closes the storage.
 	// It is valid to call Close multiple times. Other methods should not be
 	// called after the storage has been closed.
+	// 可多次调用
 	Close() error
 }
