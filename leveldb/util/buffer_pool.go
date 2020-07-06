@@ -24,12 +24,12 @@ type BufferPool struct {
 	size      [5]uint32
 	sizeMiss  [5]uint32
 	sizeHalf  [5]uint32
-	baseline  [4]int
-	baseline0 int
+	baseline  [4]int		// {baseline / 4, baseline / 2, baseline * 2, baseline * 4}
+	baseline0 int			// baseline
 
 	mu     sync.RWMutex
-	closed bool
-	closeC chan struct{}
+	closed bool				// 关闭标志
+	closeC chan struct{}	// 通知关闭信号
 
 	get     uint32
 	put     uint32
@@ -40,20 +40,25 @@ type BufferPool struct {
 	miss    uint32
 }
 
+// 判断buffer放入哪个通道
 func (p *BufferPool) poolNum(n int) int {
+	// 大于baseline0/2，且小于baseline0，放入0号
 	if n <= p.baseline0 && n > p.baseline0/2 {
 		return 0
 	}
+	// 根据baseline容量标准判断
 	for i, x := range p.baseline {
 		if n <= x {
 			return i + 1
 		}
 	}
+	// 大于baseline * 4，放入5号
 	return len(p.baseline) + 1
 }
 
 // Get returns buffer with length of n.
 func (p *BufferPool) Get(n int) []byte {
+	// pool为空
 	if p == nil {
 		return make([]byte, n)
 	}
@@ -62,6 +67,7 @@ func (p *BufferPool) Get(n int) []byte {
 	defer p.mu.RUnlock()
 
 	if p.closed {
+		// poor关闭
 		return make([]byte, n)
 	}
 
@@ -71,11 +77,13 @@ func (p *BufferPool) Get(n int) []byte {
 	pool := p.pool[poolNum]
 	if poolNum == 0 {
 		// Fast path.
+		// 返回一个[]byte，并根据pool中[]byte和实际需求，增加pool相应状态值
 		select {
 		case b := <-pool:
 			switch {
 			case cap(b) > n:
 				if cap(b)-n >= n {
+					// 容量为n2倍多，新建[]byte返回，将b重新放回pool
 					atomic.AddUint32(&p.half, 1)
 					select {
 					case pool <- b:
@@ -96,6 +104,7 @@ func (p *BufferPool) Get(n int) []byte {
 			atomic.AddUint32(&p.miss, 1)
 		}
 
+		// 容量小于或pool空，新建[]byte返回
 		return make([]byte, n, p.baseline0)
 	} else {
 		sizePtr := &p.size[poolNum-1]
@@ -105,10 +114,11 @@ func (p *BufferPool) Get(n int) []byte {
 			switch {
 			case cap(b) > n:
 				if cap(b)-n >= n {
+					// 容量为n2倍多，新建[]byte返回，b放回pool
 					atomic.AddUint32(&p.half, 1)
 					sizeHalfPtr := &p.sizeHalf[poolNum-1]
 					if atomic.AddUint32(sizeHalfPtr, 1) == 20 {
-						// sizeHalfPtr值为20，sizePtr对应值设为cap(b)/2)，重置sizeHalfPtr
+						// 此情景发生次数达20时，b丢弃，在size[]对应位置记录(cap(b)/2)，重置计数
 						atomic.StoreUint32(sizePtr, uint32(cap(b)/2))
 						atomic.StoreUint32(sizeHalfPtr, 0)
 					} else {
@@ -128,6 +138,7 @@ func (p *BufferPool) Get(n int) []byte {
 			default:
 				atomic.AddUint32(&p.greater, 1)
 				if uint32(cap(b)) >= atomic.LoadUint32(sizePtr) {
+					// 容量小于n时，若b容量大于size[]对应位置记录，将b放回pool
 					select {
 					case pool <- b:
 					default:
@@ -139,17 +150,22 @@ func (p *BufferPool) Get(n int) []byte {
 		}
 
 		if size := atomic.LoadUint32(sizePtr); uint32(n) > size {
+			// size小于n时，返回大小为n切片
 			if size == 0 {
+				// []size对应位置存uint32(n)
 				atomic.CompareAndSwapUint32(sizePtr, 0, uint32(n))
 			} else {
 				sizeMissPtr := &p.sizeMiss[poolNum-1]
+				// 未找到记录+1
 				if atomic.AddUint32(sizeMissPtr, 1) == 20 {
+					// 未找到20次时，[]size对应位置放入uint32(n)，重置计数
 					atomic.StoreUint32(sizePtr, uint32(n))
 					atomic.StoreUint32(sizeMissPtr, 0)
 				}
 			}
 			return make([]byte, n)
 		} else {
+			// size大于n时，返回大小为n容量为size切片
 			return make([]byte, n, size)
 		}
 	}
@@ -170,6 +186,7 @@ func (p *BufferPool) Put(b []byte) {
 
 	atomic.AddUint32(&p.put, 1)
 
+	// 根据b容量将其放入pool
 	pool := p.pool[p.poolNum(cap(b))]
 	select {
 	case pool <- b:
@@ -191,6 +208,7 @@ func (p *BufferPool) Close() {
 	p.mu.Unlock()
 }
 
+// 获取pool信息
 func (p *BufferPool) String() string {
 	if p == nil {
 		return "<nil>"
@@ -201,7 +219,7 @@ func (p *BufferPool) String() string {
 }
 
 func (p *BufferPool) drain() {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)	// 每隔一段时间发信号
 	defer ticker.Stop()
 	for {
 		select {
@@ -214,6 +232,7 @@ func (p *BufferPool) drain() {
 			}
 		case <-p.closeC:
 			close(p.closeC)
+			// 关闭pool所有chan
 			for _, ch := range p.pool {
 				close(ch)
 			}

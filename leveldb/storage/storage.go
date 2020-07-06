@@ -128,6 +128,7 @@ func (fd FileDesc) Zero() bool {
 }
 
 // FileDescOk returns true if fd is a valid 'file descriptor'.
+// file descriptor是否合法
 func FileDescOk(fd FileDesc) bool {
 	switch fd.Type {
 	case TypeManifest:
@@ -146,7 +147,7 @@ type Storage interface {
 	// Lock locks the storage. Any subsequent attempt to call Lock will fail
 	// until the last lock released.
 	// Caller should call Unlock method after use.
-	// 知道最后一个锁被释放前，所有对Lock的调用将会失败
+	// 直到最后一个锁被释放前，所有对Lock的调用将会失败
 	Lock() (Locker, error)
 
 	// Log logs a string. This is used for logging.

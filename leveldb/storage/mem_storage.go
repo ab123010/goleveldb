@@ -16,6 +16,7 @@ const typeShift = 4
 
 // Verify at compile-time that typeShift is large enough to cover all FileType
 // values by confirming that 0 == 0.
+// 通过确认0 == 0，在编译时验证typeShift是否足以覆盖所有FileType值
 var _ [0]struct{} = [TypeAll >> typeShift]struct{}{}
 
 type memStorageLock struct {
@@ -33,10 +34,11 @@ func (lock *memStorageLock) Unlock() {
 }
 
 // memStorage is a memory-backed storage.
+// 内存支持存储
 type memStorage struct {
 	mu    sync.Mutex
 	slock *memStorageLock
-	files map[uint64]*memFile
+	files map[uint64]*memFile	// uint64为打包的FileDesc
 	meta  FileDesc
 }
 
@@ -119,6 +121,7 @@ func (ms *memStorage) Create(fd FileDesc) (Writer, error) {
 	defer ms.mu.Unlock()
 	m, exist := ms.files[x]
 	if exist {
+		// memFile已存在时将其重建
 		if m.open {
 			return nil, errFileOpen
 		}
@@ -164,6 +167,7 @@ func (ms *memStorage) Rename(oldfd, newfd FileDesc) error {
 	}
 	newm, exist := ms.files[newx]
 	if (exist && newm.open) || oldm.open {
+		// 文件打开状态不能重命名
 		return errFileOpen
 	}
 	delete(ms.files, oldx)
@@ -213,10 +217,12 @@ func (mw *memWriter) Close() error {
 	return nil
 }
 
+// 将FileDesc打包到int64，fd.Type占右端typeShift位，其余为fd.Num
 func packFile(fd FileDesc) uint64 {
 	return uint64(fd.Num)<<typeShift | uint64(fd.Type)
 }
 
+// 从int64解包得FileDesc
 func unpackFile(x uint64) FileDesc {
 	return FileDesc{FileType(x) & TypeAll, int64(x >> typeShift)}
 }

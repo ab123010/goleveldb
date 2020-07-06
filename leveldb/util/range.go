@@ -7,6 +7,7 @@
 package util
 
 // Range is a key range.
+// key 范围
 type Range struct {
 	// Start of the key range, include in the range.
 	Start []byte
@@ -17,6 +18,7 @@ type Range struct {
 
 // BytesPrefix returns key range that satisfy the given prefix.
 // This only applicable for the standard 'bytes comparer'.
+// 返回满足给定前缀的key range.这仅适用于标准的“字节比较器”。
 func BytesPrefix(prefix []byte) *Range {
 	var limit []byte
 	for i := len(prefix) - 1; i >= 0; i-- {

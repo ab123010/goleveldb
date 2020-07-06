@@ -22,12 +22,14 @@ func Hash(data []byte, seed uint32) uint32 {
 		i int
 	)
 
+	// 每四个字节处理
 	for n := len(data) - len(data)%4; i < n; i += 4 {
 		h += binary.LittleEndian.Uint32(data[i:])
 		h *= m
 		h ^= (h >> 16)
 	}
 
+	// 剩余字节处理
 	switch len(data) - i {
 	default:
 		panic("not reached")
@@ -46,3 +48,4 @@ func Hash(data []byte, seed uint32) uint32 {
 
 	return h
 }
+

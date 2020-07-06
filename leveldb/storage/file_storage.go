@@ -46,6 +46,7 @@ func (lock *fileStorageLock) Unlock() {
 
 type int64Slice []int64
 
+// 实现排序接口
 func (p int64Slice) Len() int           { return len(p) }
 func (p int64Slice) Less(i, j int) bool { return p[i] < p[j] }
 func (p int64Slice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
@@ -71,14 +72,15 @@ func writeFileSynced(filename string, data []byte, perm os.FileMode) error {
 const logSizeThreshold = 1024 * 1024 // 1 MiB
 
 // fileStorage is a file-system backed storage.
+// 文件系统支持存储
 type fileStorage struct {
-	path     string
+	path     string				// 工作目录
 	readOnly bool
 
 	mu      sync.Mutex
 	flock   fileLock
 	slock   *fileStorageLock
-	logw    *os.File
+	logw    *os.File			// 日志文件
 	logSize int64
 	buf     []byte
 	// Opened file counter; if open < 0 means closed.
@@ -91,12 +93,15 @@ type fileStorage struct {
 // same path will fail.
 //
 // The storage must be closed after use, by calling Close method.
+// 返回一个由给定path实现的filesystem-backed storage
+// 将获得一个文件锁，不可被重复打开，使用完毕后需调用Close方法
 func OpenFile(path string, readOnly bool) (Storage, error) {
 	if fi, err := os.Stat(path); err == nil {
 		if !fi.IsDir() {
 			return nil, fmt.Errorf("leveldb/storage: open %s: not a directory", path)
 		}
 	} else if os.IsNotExist(err) && !readOnly {
+		// 文件不存在且操作不是只读，新建文件
 		if err := os.MkdirAll(path, 0755); err != nil {
 			return nil, err
 		}
@@ -109,6 +114,7 @@ func OpenFile(path string, readOnly bool) (Storage, error) {
 		return nil, err
 	}
 
+	// 使用完成后释放文件锁
 	defer func() {
 		if err != nil {
 			flock.release()
@@ -138,6 +144,7 @@ func OpenFile(path string, readOnly bool) (Storage, error) {
 		logw:     logw,
 		logSize:  logSize,
 	}
+	// 设置与fs提供的Close关联的终结器
 	runtime.SetFinalizer(fs, (*fileStorage).Close)
 	return fs, nil
 }
@@ -149,15 +156,18 @@ func (fs *fileStorage) Lock() (Locker, error) {
 		return nil, ErrClosed
 	}
 	if fs.readOnly {
+		// 只读
 		return &fileStorageLock{}, nil
 	}
 	if fs.slock != nil {
+		// 已上锁
 		return nil, ErrLocked
 	}
 	fs.slock = &fileStorageLock{fs: fs}
 	return fs.slock, nil
 }
 
+// 将i写入buf，wid为添加位数
 func itoa(buf []byte, i int, wid int) []byte {
 	u := uint(i)
 	if u == 0 && wid <= 1 {
@@ -168,6 +178,7 @@ func itoa(buf []byte, i int, wid int) []byte {
 	var b [32]byte
 	bp := len(b)
 	for ; u > 0 || wid > 0; u /= 10 {
+		// 从b最后往前写
 		bp--
 		wid--
 		b[bp] = byte(u%10) + '0'
@@ -183,15 +194,19 @@ func (fs *fileStorage) printDay(t time.Time) {
 	fs.logw.Write([]byte("=============== " + t.Format("Jan 2, 2006 (MST)") + " ===============\n"))
 }
 
+// 写日志
 func (fs *fileStorage) doLog(t time.Time, str string) {
 	if fs.logSize > logSizeThreshold {
 		// Rotate log file.
+		// 日志大小超过阀值
 		fs.logw.Close()
 		fs.logw = nil
 		fs.logSize = 0
+		// 重命名后缀名为LOG.old
 		rename(filepath.Join(fs.path, "LOG"), filepath.Join(fs.path, "LOG.old"))
 	}
 	if fs.logw == nil {
+		// 打开当前日志文件
 		var err error
 		fs.logw, err = os.OpenFile(filepath.Join(fs.path, "LOG"), os.O_WRONLY|os.O_CREATE, 0644)
 		if err != nil {
@@ -200,6 +215,7 @@ func (fs *fileStorage) doLog(t time.Time, str string) {
 		// Force printDay on new log file.
 		fs.day = 0
 	}
+	// 记录写日志时间
 	fs.printDay(t)
 	hour, min, sec := t.Clock()
 	msec := t.Nanosecond() / 1e3
@@ -212,13 +228,16 @@ func (fs *fileStorage) doLog(t time.Time, str string) {
 	fs.buf = append(fs.buf, '.')
 	fs.buf = itoa(fs.buf, msec, 6)
 	fs.buf = append(fs.buf, ' ')
+
 	// write
+	// 将内容写入日志
 	fs.buf = append(fs.buf, []byte(str)...)
 	fs.buf = append(fs.buf, '\n')
 	n, _ := fs.logw.Write(fs.buf)
 	fs.logSize += int64(n)
 }
 
+// 包装doLog，加锁
 func (fs *fileStorage) Log(str string) {
 	if !fs.readOnly {
 		t := time.Now()
@@ -231,15 +250,18 @@ func (fs *fileStorage) Log(str string) {
 	}
 }
 
+// 若不是只读，doLog
 func (fs *fileStorage) log(str string) {
 	if !fs.readOnly {
 		fs.doLog(time.Now(), str)
 	}
 }
 
+// 存储FileDesc元数据到CURRENT文件
 func (fs *fileStorage) setMeta(fd FileDesc) error {
 	content := fsGenName(fd) + "\n"
 	// Check and backup old CURRENT file.
+	// 检查并备份旧的CURRENT文件
 	currentPath := filepath.Join(fs.path, "CURRENT")
 	if _, err := os.Stat(currentPath); err == nil {
 		b, err := ioutil.ReadFile(currentPath)
@@ -249,26 +271,31 @@ func (fs *fileStorage) setMeta(fd FileDesc) error {
 		}
 		if string(b) == content {
 			// Content not changed, do nothing.
+			// 已存储且未改变
 			return nil
 		}
 		if err := writeFileSynced(currentPath+".bak", b, 0644); err != nil {
+			// 备份旧的CURRENT文件
 			fs.log(fmt.Sprintf("backup CURRENT: %v", err))
 			return err
 		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	// 创建对应文件写入元数据
 	path := fmt.Sprintf("%s.%d", filepath.Join(fs.path, "CURRENT"), fd.Num)
 	if err := writeFileSynced(path, []byte(content), 0644); err != nil {
 		fs.log(fmt.Sprintf("create CURRENT.%d: %v", fd.Num, err))
 		return err
 	}
 	// Replace CURRENT file.
+	// 更名为CUURENT后缀
 	if err := rename(path, currentPath); err != nil {
 		fs.log(fmt.Sprintf("rename CURRENT.%d: %v", fd.Num, err))
 		return err
 	}
 	// Sync root directory.
+	// 同步到根目录
 	if err := syncDir(fs.path); err != nil {
 		fs.log(fmt.Sprintf("syncDir: %v", err))
 		return err
@@ -276,6 +303,7 @@ func (fs *fileStorage) setMeta(fd FileDesc) error {
 	return nil
 }
 
+// 包装setMeta，加锁，验证
 func (fs *fileStorage) SetMeta(fd FileDesc) error {
 	if !FileDescOk(fd) {
 		return ErrInvalidFile
@@ -292,6 +320,7 @@ func (fs *fileStorage) SetMeta(fd FileDesc) error {
 	return fs.setMeta(fd)
 }
 
+// 维护CURRENT文件最新，从中获取FileDesc
 func (fs *fileStorage) GetMeta() (FileDesc, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -330,6 +359,7 @@ func (fs *fileStorage) GetMeta() (FileDesc, error) {
 		}
 		var fd FileDesc
 		if len(b) < 1 || b[len(b)-1] != '\n' || !fsParseNamePtr(string(b[:len(b)-1]), &fd) {
+			// 存储FileDesc文件内容不合法
 			fs.log(fmt.Sprintf("%s: corrupted content: %q", name, b))
 			err := &ErrCorrupted{
 				Err: errors.New("leveldb/storage: corrupted or incomplete CURRENT file"),
@@ -338,6 +368,7 @@ func (fs *fileStorage) GetMeta() (FileDesc, error) {
 		}
 		if _, err := os.Stat(filepath.Join(fs.path, fsGenName(fd))); err != nil {
 			if os.IsNotExist(err) {
+				// FileDesc指示文件不存在
 				fs.log(fmt.Sprintf("%s: missing target file: %s", name, fd))
 				err = os.ErrNotExist
 			}
@@ -346,6 +377,7 @@ func (fs *fileStorage) GetMeta() (FileDesc, error) {
 		return &currentFile{name: name, fd: fd}, nil
 	}
 	tryCurrents := func(names []string) (*currentFile, error) {
+		// 遍历names寻找currentFile
 		var (
 			cur *currentFile
 			// Last corruption error.
@@ -411,16 +443,19 @@ func (fs *fileStorage) GetMeta() (FileDesc, error) {
 
 	// pendCur takes precedence, but guards against obsolete pendCur.
 	if pendCur != nil && (curCur == nil || pendCur.fd.Num > curCur.fd.Num) {
+		// 有更新的CURRENT文件，其尚未重命名为CURRENT
 		curCur = pendCur
 	}
 
 	if curCur != nil {
 		// Restore CURRENT file to proper state.
+		// 重命名最新CURRENT文件
 		if !fs.readOnly && (curCur.name != "CURRENT" || len(pendNames) != 0) {
 			// Ignore setMeta errors, however don't delete obsolete files if we
 			// catch error.
 			if err := fs.setMeta(curCur.fd); err == nil {
 				// Remove 'pending rename' files.
+				// 完成重命名，删除所有旧的待重命名文件
 				for _, name := range pendNames {
 					if err := os.Remove(filepath.Join(fs.path, name)); err != nil {
 						fs.log(fmt.Sprintf("remove %s: %v", name, err))
@@ -448,6 +483,7 @@ func (fs *fileStorage) List(ft FileType) (fds []FileDesc, err error) {
 	if err != nil {
 		return
 	}
+	// 取目录中所有文件name
 	names, err := dir.Readdirnames(0)
 	// Close the dir first before checking for Readdirnames error.
 	if cerr := dir.Close(); cerr != nil {
@@ -456,6 +492,7 @@ func (fs *fileStorage) List(ft FileType) (fds []FileDesc, err error) {
 	if err == nil {
 		for _, name := range names {
 			if fd, ok := fsParseName(name); ok && fd.Type&ft != 0 {
+				// 检验文件类型是否满足条件
 				fds = append(fds, fd)
 			}
 		}
@@ -476,6 +513,7 @@ func (fs *fileStorage) Open(fd FileDesc) (Reader, error) {
 	of, err := os.OpenFile(filepath.Join(fs.path, fsGenName(fd)), os.O_RDONLY, 0)
 	if err != nil {
 		if fsHasOldName(fd) && os.IsNotExist(err) {
+			// 类型为TypeTable，后缀还可能sst
 			of, err = os.OpenFile(filepath.Join(fs.path, fsGenOldName(fd)), os.O_RDONLY, 0)
 			if err == nil {
 				goto ok
@@ -484,6 +522,7 @@ func (fs *fileStorage) Open(fd FileDesc) (Reader, error) {
 		return nil, err
 	}
 ok:
+	// 打开目录中文件数++
 	fs.open++
 	return &fileWrap{File: of, fs: fs, fd: fd}, nil
 }
@@ -588,6 +627,7 @@ func (fw *fileWrap) Sync() error {
 	if fw.fd.Type == TypeManifest {
 		// Also sync parent directory if file type is manifest.
 		// See: https://code.google.com/p/leveldb/issues/detail?id=190.
+		// 同时同步到父目录
 		if err := syncDir(fw.fs.path); err != nil {
 			fw.fs.log(fmt.Sprintf("syncDir: %v", err))
 			return err
@@ -611,6 +651,7 @@ func (fw *fileWrap) Close() error {
 	return err
 }
 
+// 对FileDesc生成name
 func fsGenName(fd FileDesc) string {
 	switch fd.Type {
 	case TypeManifest:
@@ -638,6 +679,7 @@ func fsGenOldName(fd FileDesc) string {
 	return fsGenName(fd)
 }
 
+// 根据name解析出FileDesc
 func fsParseName(name string) (fd FileDesc, ok bool) {
 	var tail string
 	_, err := fmt.Sscanf(name, "%d.%s", &fd.Num, &tail)
@@ -662,6 +704,7 @@ func fsParseName(name string) (fd FileDesc, ok bool) {
 	return
 }
 
+// 解析name到fd
 func fsParseNamePtr(name string, fd *FileDesc) bool {
 	_fd, ok := fsParseName(name)
 	if fd != nil {

@@ -19,6 +19,7 @@ type bloomFilter int
 // Name: The bloom filter serializes its parameters and is backward compatible
 // with respect to them. Therefor, its parameters are not added to its
 // name.
+// Bloom过滤器将其参数序列化，并对其进行向后兼容。 因此，其参数不会添加到名称中
 func (bloomFilter) Name() string {
 	return "leveldb.BuiltinBloomFilter"
 }
@@ -43,6 +44,7 @@ func (f bloomFilter) Contains(filter, key []byte) bool {
 	delta := (kh >> 17) | (kh << 15) // Rotate right 17 bits
 	for j := uint8(0); j < k; j++ {
 		bitpos := kh % nBits
+		// 判断对应位是否为1，若某位不为1，返回false
 		if (uint32(filter[bitpos/8]) & (1 << (bitpos % 8))) == 0 {
 			return false
 		}
@@ -66,8 +68,8 @@ func (f bloomFilter) NewGenerator() FilterGenerator {
 }
 
 type bloomFilterGenerator struct {
-	n int
-	k uint8
+	n int			// 每个key对应bit数
+	k uint8			// 函数个数
 
 	keyHashes []uint32
 }
@@ -80,9 +82,11 @@ func (g *bloomFilterGenerator) Add(key []byte) {
 
 func (g *bloomFilterGenerator) Generate(b Buffer) {
 	// Compute bloom filter size (in both bits and bytes)
+	// 计算布隆过滤器大小，key个数*参数n
 	nBits := uint32(len(g.keyHashes) * g.n)
 	// For small n, we can see a very high false positive rate.  Fix it
 	// by enforcing a minimum bloom filter length.
+	// 对于小n，我们可以看到很高的误报率。通过强制最小布隆过滤器长度进行修复
 	if nBits < 64 {
 		nBits = 64
 	}
@@ -90,16 +94,20 @@ func (g *bloomFilterGenerator) Generate(b Buffer) {
 	nBits = nBytes * 8
 
 	dest := b.Alloc(int(nBytes) + 1)
-	dest[nBytes] = g.k
+	dest[nBytes] = g.k		// 存放参数
 	for _, kh := range g.keyHashes {
+		// 对hash值右移17，每次将其与hash值相加，的新hash
 		delta := (kh >> 17) | (kh << 15) // Rotate right 17 bits
 		for j := uint8(0); j < g.k; j++ {
 			bitpos := kh % nBits
+			// byte数组中对应bit|=1
 			dest[bitpos/8] |= (1 << (bitpos % 8))
+			// 得到新的hash值
 			kh += delta
 		}
 	}
 
+	// 重置生成器
 	g.keyHashes = g.keyHashes[:0]
 }
 
@@ -111,6 +119,7 @@ func (g *bloomFilterGenerator) Generate(b Buffer) {
 // changing bitsPerKey. This means that no big performance penalty will
 // be experienced when changing the parameter. See documentation for
 // opt.Options.Filter for more information.
+// bitsPerKey指定一个key对应几个bits
 func NewBloomFilter(bitsPerKey int) Filter {
 	return bloomFilter(bitsPerKey)
 }
